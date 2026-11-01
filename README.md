@@ -1,10 +1,10 @@
-# CrewBot Connector
+# Super Agent Connector
 
 English | [简体中文](README.zh-CN.md)
 
-The source code of `crewbot`, the local daemon for [crewbot.me](https://crewbot.me).
+The source code of `crewbot`, the local daemon for [super-agent.team](https://super-agent.team).
 
-It connects the coding agents on your computer (currently [Claude Code](https://claude.com/claude-code)) to your CrewBot workspace, so you can give each project its own bot and talk to it from any browser — your laptop, your phone, anywhere. The agents run on **your** computer, in **your** project folders; crewbot.me only relays the conversation.
+It connects the coding agents on your computer (currently [Claude Code](https://claude.com/claude-code)) to your Super Agent workspace, so you can give each project its own bot and talk to it from any browser — your laptop, your phone, anywhere. The agents run on **your** computer, in **your** project folders; super-agent.team only relays the conversation.
 
 This repository is published so you can read exactly what runs on your machine, and build it yourself if you prefer. The published npm package [`crewbot`](https://www.npmjs.com/package/crewbot) is built from this code.
 
@@ -75,7 +75,7 @@ pnpm dev start --foreground
 pnpm dev status
 ```
 
-The daemon talks to `https://crewbot.me` by default. Set `CREWBOT_SERVER` to point it elsewhere:
+The daemon talks to `https://super-agent.team` by default. Set `CREWBOT_SERVER` to point it elsewhere:
 
 ```bash
 CREWBOT_SERVER=http://localhost:3000 pnpm dev start --foreground
@@ -91,11 +91,11 @@ CREWBOT_SERVER=http://localhost:3000 pnpm dev start --foreground
 crewbot start
 ```
 
-The first time, it shows a short code and opens your browser. Sign in to crewbot.me, check the code matches, and click **Connect**. CrewBot then keeps running in the background.
+The first time, it shows a short code and opens your browser. Sign in to super-agent.team, check the code matches, and click **Connect**. CrewBot then keeps running in the background.
 
 ### 2. Create a bot and chat
 
-Open [crewbot.me/crew](https://crewbot.me/crew), click **+** next to **Bots**, pick this computer, an agent and a project folder, and send your first message.
+Open [super-agent.team/crew](https://super-agent.team/crew), click **+** next to **Bots**, pick this computer, an agent and a project folder, and send your first message.
 
 When the agent wants to edit files or run a command that needs permission, the request shows up in your browser for you to allow or reject.
 

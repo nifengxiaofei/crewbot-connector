@@ -1,10 +1,10 @@
-# CrewBot Connector
+# Super Agent Connector
 
 [English](README.md) | 简体中文
 
-[crewbot.me](https://crewbot.me) 本地守护进程 `crewbot` 的源码。
+[super-agent.team](https://super-agent.team) 本地守护进程 `crewbot` 的源码。
 
-它把你电脑上的编程 agent（目前支持 [Claude Code](https://claude.com/claude-code)）连接到你的 CrewBot 工作区：每个项目配一个 bot，在任何浏览器里——笔记本、手机、任何地方——都能和它对话。agent 运行在**你自己的**电脑上、**你自己的**项目目录里，crewbot.me 只负责中转对话。
+它把你电脑上的编程 agent（目前支持 [Claude Code](https://claude.com/claude-code)）连接到你的 Super Agent 工作区：每个项目配一个 bot，在任何浏览器里——笔记本、手机、任何地方——都能和它对话。agent 运行在**你自己的**电脑上、**你自己的**项目目录里，super-agent.team 只负责中转对话。
 
 公开这个仓库，是为了让你清楚地看到在自己机器上运行的是什么代码，也可以选择自己编译。npm 上发布的 [`crewbot`](https://www.npmjs.com/package/crewbot) 包就是用这份代码构建的。
 
@@ -75,7 +75,7 @@ pnpm dev start --foreground
 pnpm dev status
 ```
 
-daemon 默认连接 `https://crewbot.me`，可以用 `CREWBOT_SERVER` 指定其他服务器：
+daemon 默认连接 `https://super-agent.team`，可以用 `CREWBOT_SERVER` 指定其他服务器：
 
 ```bash
 CREWBOT_SERVER=http://localhost:3000 pnpm dev start --foreground
@@ -91,11 +91,11 @@ CREWBOT_SERVER=http://localhost:3000 pnpm dev start --foreground
 crewbot start
 ```
 
-第一次运行时会显示一个短码并打开浏览器。登录 crewbot.me，确认短码一致后点击 **Connect**。之后 CrewBot 会在后台持续运行。
+第一次运行时会显示一个短码并打开浏览器。登录 super-agent.team，确认短码一致后点击 **Connect**。之后 CrewBot 会在后台持续运行。
 
 ### 2. 创建 bot 并对话
 
-打开 [crewbot.me/crew](https://crewbot.me/crew)，点击 **Bots** 旁边的 **+**，选择这台电脑、agent 和项目目录，然后发出第一条消息。
+打开 [super-agent.team/crew](https://super-agent.team/crew)，点击 **Bots** 旁边的 **+**，选择这台电脑、agent 和项目目录，然后发出第一条消息。
 
 agent 需要修改文件或执行需要授权的命令时，请求会出现在浏览器里，由你选择允许或拒绝。
 

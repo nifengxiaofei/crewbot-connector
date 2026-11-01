@@ -1,7 +1,7 @@
 {
   "name": "crewbot",
-  "version": "0.1.0",
-  "description": "Run the coding agents on your computers from anywhere — the local daemon for crewbot.me",
+  "version": "0.1.3",
+  "description": "Run the coding agents on your computers from anywhere — the local daemon for super-agent.team",
   "keywords": [
     "crewbot",
     "claude-code",
@@ -11,12 +11,12 @@
     "remote",
     "cli"
   ],
-  "homepage": "https://crewbot.me",
+  "homepage": "https://super-agent.team",
   "license": "MIT",
   "author": "nifengfei",
   "type": "module",
   "bin": {
-    "crewbot": "./dist/index.mjs"
+    "crewbot": "dist/index.mjs"
   },
   "files": [
     "dist",

@@ -1,8 +1,8 @@
 # crewbot
 
-The local daemon for [crewbot.me](https://crewbot.me). It connects the coding agents on your computer to your CrewBot workspace, so you can give each project its own bot and talk to it from any browser — your laptop, your phone, anywhere.
+The local daemon for [super-agent.team](https://super-agent.team). It connects the coding agents on your computer to your Super Agent workspace, so you can give each project its own bot and talk to it from any browser — your laptop, your phone, anywhere.
 
-The agents run on **your** computer, in **your** project folders. crewbot.me only relays the conversation.
+The agents run on **your** computer, in **your** project folders. super-agent.team only relays the conversation.
 
 ## Quick start
 
@@ -10,9 +10,9 @@ The agents run on **your** computer, in **your** project folders. crewbot.me onl
 npx crewbot start
 ```
 
-The first time, it shows a short code and opens your browser. Sign in to crewbot.me, check the code matches, and click **Connect**. CrewBot then keeps running in the background.
+The first time, it shows a short code and opens your browser. Sign in to super-agent.team, check the code matches, and click **Connect**. CrewBot then keeps running in the background.
 
-Open [crewbot.me/crew](https://crewbot.me/crew), click **+** next to **Bots**, pick this computer, an agent and a project folder, and send your first message.
+Open [super-agent.team/crew](https://super-agent.team/crew), click **+** next to **Bots**, pick this computer, an agent and a project folder, and send your first message.
 
 ## Install
 
@@ -66,7 +66,7 @@ npm install -g crewbot@latest --registry https://registry.npmjs.org/
 
 ## How it works
 
-- CrewBot opens one outgoing connection to crewbot.me. It never listens on a port, so it works behind routers and firewalls.
+- CrewBot opens one outgoing connection to super-agent.team. It never listens on a port, so it works behind routers and firewalls.
 - When you message a bot, CrewBot starts that bot's agent in the bot's folder and resumes its session. Agents that sit idle for 15 minutes are shut down and resumed on the next message.
 - When an agent wants to edit files or run a command that needs permission, the request shows up in your browser for you to allow or reject.
 

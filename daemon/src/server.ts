@@ -1,6 +1,6 @@
 // 和 crewbot 服务端的 HTTP 交互
 export const SERVER_URL = (
-  process.env.CREWBOT_SERVER ?? 'https://crewbot.me'
+  process.env.CREWBOT_SERVER ?? 'https://super-agent.team'
 ).replace(/\/$/, '');
 
 /** POST JSON，拆开服务器响应的 { code, message, data } 外壳 */

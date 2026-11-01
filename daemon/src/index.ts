@@ -23,7 +23,7 @@ Usage: crewbot <command>
 Options:
   start --foreground   Run in the foreground instead (for debugging or systemd)
 
-Then open https://crewbot.me/crew`;
+Then open https://super-agent.team/crew`;
 
 const [command, ...args] = process.argv.slice(2);
 
