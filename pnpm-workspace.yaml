@@ -1,0 +1,6 @@
+packages:
+  - daemon
+  - packages/*
+
+onlyBuiltDependencies:
+  - esbuild
