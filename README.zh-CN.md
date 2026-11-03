@@ -4,7 +4,7 @@
 
 [super-agent.team](https://super-agent.team) 本地守护进程 `crewbot` 的源码。
 
-它把你电脑上的编程 agent（目前支持 [Claude Code](https://claude.com/claude-code)）连接到你的 Super Agent 工作区：每个项目配一个 bot，在任何浏览器里——笔记本、手机、任何地方——都能和它对话。agent 运行在**你自己的**电脑上、**你自己的**项目目录里，super-agent.team 只负责中转对话。
+它把你电脑上的编程 agent（支持 [Claude Code](https://claude.com/claude-code)、[Codex](https://github.com/openai/codex) 和 [Grok](https://docs.x.ai/build/overview)）连接到你的 Super Agent 工作区：每个项目配一个 bot，在任何浏览器里——笔记本、手机、任何地方——都能和它对话。agent 运行在**你自己的**电脑上、**你自己的**项目目录里，super-agent.team 只负责中转对话。
 
 公开这个仓库，是为了让你清楚地看到在自己机器上运行的是什么代码，也可以选择自己编译。npm 上发布的 [`crewbot`](https://www.npmjs.com/package/crewbot) 包就是用这份代码构建的。
 
@@ -19,20 +19,27 @@
 │   │   ├── login.ts      # 设备配对（OAuth 2.0 设备授权流程）
 │   │   ├── daemon.ts     # 与服务器的 WebSocket 连接、断线重连、事件补传
 │   │   ├── agent.ts      # 每个 bot 对应一个 agent 进程和一个 ACP 会话
-│   │   ├── adapters.ts   # 首次使用时安装 Claude Code 的 ACP 适配器
-│   │   ├── agents.ts     # 检测本机已安装的 agent（claude）及登录状态
+│   │   ├── adapters.ts   # 首次使用时安装 Claude Code / Codex 的 ACP 适配器
+│   │   ├── agents.ts     # 检测本机已安装的 agent（claude、codex、grok）及登录状态
+│   │   ├── shell-env.ts  # 检测或启动 agent 前，读取登录 shell 的环境变量
+│   │   ├── workspaces.ts # 新建 bot 时没指定目录用的默认工作目录
 │   │   └── ...
 │   └── spike/acp.ts      # 独立的 ACP 验证脚本（prompt / steering / 审批 / 恢复会话）
 └── packages/protocol/    # daemon 与服务器共用的消息类型（构建时打包进产物）
 ```
 
-agent 通过 [Agent Client Protocol（ACP）](https://agentclientprotocol.com) 驱动，使用 [`@agentclientprotocol/claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)。
+agent 通过 [Agent Client Protocol（ACP）](https://agentclientprotocol.com) 驱动，Claude Code 使用 [`@agentclientprotocol/claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)，Codex 使用 [`@agentclientprotocol/codex-acp`](https://www.npmjs.com/package/@agentclientprotocol/codex-acp)，Grok 原生支持 ACP。
 
 ## 环境要求
 
 - Node.js 22 或更高版本
 - pnpm 10（执行 `corepack enable` 会自动使用 `package.json` 里锁定的版本）
-- 已安装并登录 [Claude Code](https://claude.com/claude-code)（先运行一次 `claude`）。CrewBot 使用你电脑上已有的 `claude`。
+- 至少安装并登录（或配好 API key）一个支持的 agent。CrewBot 使用你电脑上已有的那一份，沿用它自己的设置（模型、key、权限模式）：
+  - [Claude Code](https://claude.com/claude-code)——`claude`
+  - [Codex](https://github.com/openai/codex)——`codex`
+  - [Grok](https://docs.x.ai/build/overview)——`grok`
+
+  CrewBot 启动之后才安装或登录的？执行 `crewbot restart` 让它重新检测。
 
 ## 从源码编译
 
@@ -109,15 +116,15 @@ agent 需要修改文件或执行需要授权的命令时，请求会出现在�
 | `crewbot restart` | 重启（例如升级之后） |
 | `crewbot status` | 查看是否在运行、是否已连接，以及检测到哪些 agent |
 | `crewbot logs [-f]` | 查看 daemon 日志；`-f` 持续跟踪 |
-| `crewbot logout` | 停止 CrewBot 并解除这台电脑的关联 |
+| `crewbot logout` | 停止 CrewBot、解除这台电脑的关联并删除它上面的 bot（会先确认；`--yes` 跳过确认） |
 
 ## 工作原理
 
 - **配对**：使用 OAuth 2.0 设备授权流程（RFC 8628）。daemon 申请短码，你在浏览器中确认，daemon 拿到设备凭据并保存在 `~/.config/crewbot/credentials.json`（权限 600）。
-- **连接**：daemon 只向服务器建立一条出站 WebSocket 连接，从不监听端口，因此在路由器、防火墙后面也能用。每 30 秒发一次心跳，断线后按指数退避重连（最长 30 秒）。
+- **连接**：daemon 只向服务器建立一条出站 WebSocket 连接，从不监听端口，因此在路由器、防火墙后面也能用。每 15 秒发一次心跳，断线后按指数退避重连（最长 30 秒）。
 - **输出不丢**：daemon 产生的每个事件都按 bot 编号，并保留到服务器确认收到为止；重连后会补发服务器还没收到的事件。
 - **agent**：给 bot 发消息时，daemon 在该 bot 的目录里启动 agent 并恢复它的会话。一轮还在执行时发来的消息，agent 支持的话会插入当前这一轮（steering），否则排队。空闲 15 分钟的 agent 会被关闭，下次来消息时再恢复。
-- **适配器**：首次使用时，daemon 会执行 `npm install @agentclientprotocol/claude-agent-acp`，安装到 `~/.config/crewbot/agents/`（跳过它自带的 Claude 二进制），并让它使用你自己的 `claude`。
+- **适配器**：首次使用时，daemon 会用 `npm install` 把 agent 的适配器（`@agentclientprotocol/claude-agent-acp` 或 `@agentclientprotocol/codex-acp`）安装到 `~/.config/crewbot/agents/`（跳过它自带的 agent 二进制），并让它使用你自己的 `claude` / `codex`。Grok 不需要适配器。
 
 ## 本地文件
 
@@ -129,11 +136,12 @@ agent 需要修改文件或执行需要授权的命令时，请求会出现在�
 | `daemon.pid`、`state.json` | 运行中 daemon 的 pid 和状态，供 `crewbot status` 读取 |
 | `logs/` | `daemon.log`，以及每个 bot 的 agent 日志 |
 | `agents/` | 首次使用时从 npm 安装的 agent 适配器 |
+| `workspaces/` | 新建 bot 时没指定工作目录用的默认目录，每个 bot 一个。随 bot 一起删除；你自己选的目录从不改动 |
 
 ## 卸载
 
 ```bash
-crewbot logout          # 停止 CrewBot 并解除这台电脑与账号的关联
+crewbot logout          # 停止 CrewBot、解除这台电脑与账号的关联并删除它上面的 bot
 npm uninstall -g crewbot
 rm -rf ~/.config/crewbot
 ```

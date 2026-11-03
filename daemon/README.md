@@ -49,7 +49,12 @@ npm install -g crewbot@latest --registry https://registry.npmjs.org/
 ## Requirements
 
 - Node.js 22 or newer
-- [Claude Code](https://claude.com/claude-code) installed and signed in (run `claude` once). CrewBot uses the `claude` already on your computer.
+- At least one supported agent, installed and signed in (or set up with an API key). CrewBot uses the copy already on your computer, with its own settings (model, key, permission mode):
+  - [Claude Code](https://claude.com/claude-code) — `claude`
+  - [Codex](https://github.com/openai/codex) — `codex`
+  - [Grok](https://docs.x.ai/build/overview) — `grok`
+
+  Installed or signed in to one after CrewBot started? Run `crewbot restart` so it picks it up.
 
 ## Commands
 
@@ -60,7 +65,7 @@ npm install -g crewbot@latest --registry https://registry.npmjs.org/
 | `crewbot restart` | Restarts it (for example after upgrading CrewBot) |
 | `crewbot status` | Shows whether it's running and connected, and which agents it found |
 | `crewbot logs [-f]` | Shows the daemon log; `-f` keeps following it |
-| `crewbot logout` | Stops CrewBot and unlinks this computer |
+| `crewbot logout` | Stops CrewBot, unlinks this computer and deletes its bots (asks first; `--yes` skips) |
 
 `crewbot start --foreground` runs it in the foreground instead — handy for debugging, or for running it under systemd or similar.
 
@@ -79,8 +84,9 @@ Everything lives in `~/.config/crewbot/` (or `$XDG_CONFIG_HOME/crewbot/`):
 | `credentials.json` | This computer's link to your account (readable only by you) |
 | `logs/` | `daemon.log`, plus one log per bot's agent |
 | `agents/` | Agent adapters, installed from npm on first use |
+| `workspaces/` | Default folders for bots created without a working directory, one per bot. Deleted with the bot; folders you chose yourself are never touched |
 
-On first use CrewBot installs the Claude Code adapter ([`@agentclientprotocol/claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)) into `agents/` with `npm install`. This takes a few seconds once.
+On first use CrewBot installs the agent's adapter into `agents/` with `npm install` — [`@agentclientprotocol/claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp) for Claude Code, [`@agentclientprotocol/codex-acp`](https://www.npmjs.com/package/@agentclientprotocol/codex-acp) for Codex. This takes a few seconds once. Grok needs no adapter.
 
 ## Uninstall
 

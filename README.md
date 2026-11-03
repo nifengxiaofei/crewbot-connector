@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 The source code of `crewbot`, the local daemon for [super-agent.team](https://super-agent.team).
 
-It connects the coding agents on your computer (currently [Claude Code](https://claude.com/claude-code)) to your Super Agent workspace, so you can give each project its own bot and talk to it from any browser — your laptop, your phone, anywhere. The agents run on **your** computer, in **your** project folders; super-agent.team only relays the conversation.
+It connects the coding agents on your computer ([Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex) and [Grok](https://docs.x.ai/build/overview)) to your Super Agent workspace, so you can give each project its own bot and talk to it from any browser — your laptop, your phone, anywhere. The agents run on **your** computer, in **your** project folders; super-agent.team only relays the conversation.
 
 This repository is published so you can read exactly what runs on your machine, and build it yourself if you prefer. The published npm package [`crewbot`](https://www.npmjs.com/package/crewbot) is built from this code.
 
@@ -19,20 +19,27 @@ This repository is published so you can read exactly what runs on your machine, 
 │   │   ├── login.ts      # device pairing (OAuth 2.0 device authorization flow)
 │   │   ├── daemon.ts     # WebSocket connection to the server, reconnect, event resend
 │   │   ├── agent.ts      # one agent process + one ACP session per bot
-│   │   ├── adapters.ts   # installs the Claude Code ACP adapter on first use
-│   │   ├── agents.ts     # detects installed agents (claude) and their login status
+│   │   ├── adapters.ts   # installs the Claude Code / Codex ACP adapters on first use
+│   │   ├── agents.ts     # detects installed agents (claude, codex, grok) and their login status
+│   │   ├── shell-env.ts  # reads your login shell's environment before checking or starting an agent
+│   │   ├── workspaces.ts # default folders for bots created without one
 │   │   └── ...
 │   └── spike/acp.ts      # standalone ACP test script (prompt / steering / permissions / resume)
 └── packages/protocol/    # message types shared by the daemon and the server (bundled into the build)
 ```
 
-Agents are driven through the [Agent Client Protocol (ACP)](https://agentclientprotocol.com) using [`@agentclientprotocol/claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp).
+Agents are driven through the [Agent Client Protocol (ACP)](https://agentclientprotocol.com) using [`@agentclientprotocol/claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp) for Claude Code and [`@agentclientprotocol/codex-acp`](https://www.npmjs.com/package/@agentclientprotocol/codex-acp) for Codex. Grok speaks ACP natively.
 
 ## Requirements
 
 - Node.js 22 or newer
 - pnpm 10 (`corepack enable` sets up the version pinned in `package.json`)
-- [Claude Code](https://claude.com/claude-code) installed and signed in (run `claude` once). CrewBot uses the `claude` already on your computer.
+- At least one supported agent, installed and signed in (or set up with an API key). CrewBot uses the copy already on your computer, with its own settings (model, key, permission mode):
+  - [Claude Code](https://claude.com/claude-code) — `claude`
+  - [Codex](https://github.com/openai/codex) — `codex`
+  - [Grok](https://docs.x.ai/build/overview) — `grok`
+
+  Installed or signed in to one after CrewBot started? Run `crewbot restart` so it picks it up.
 
 ## Build from source
 
@@ -109,15 +116,15 @@ When the agent wants to edit files or run a command that needs permission, the r
 | `crewbot restart` | Restarts it (for example after upgrading) |
 | `crewbot status` | Shows whether it's running and connected, and which agents it found |
 | `crewbot logs [-f]` | Shows the daemon log; `-f` keeps following it |
-| `crewbot logout` | Stops CrewBot and unlinks this computer |
+| `crewbot logout` | Stops CrewBot, unlinks this computer and deletes its bots (asks first; `--yes` skips) |
 
 ## How it works
 
 - **Pairing** uses the OAuth 2.0 device authorization flow (RFC 8628): the daemon requests a short code, you confirm it in the browser, and the daemon receives a device token stored in `~/.config/crewbot/credentials.json` (mode 600).
-- **Connection**: the daemon opens one outgoing WebSocket to the server. It never listens on a port, so it works behind routers and firewalls. It sends a heartbeat every 30 seconds and reconnects with exponential backoff (up to 30 s).
+- **Connection**: the daemon opens one outgoing WebSocket to the server. It never listens on a port, so it works behind routers and firewalls. It sends a heartbeat every 15 seconds and reconnects with exponential backoff (up to 30 s).
 - **No lost output**: every event the daemon produces is numbered per bot and kept until the server acknowledges it; after a reconnect, anything the server hasn't received is sent again.
 - **Agents**: when you message a bot, the daemon starts that bot's agent in the bot's folder and resumes its session. Messages sent while a turn is running are injected into it (steering) when the agent supports it, otherwise queued. Agents idle for 15 minutes are shut down and resumed on the next message.
-- **Adapter**: on first use the daemon runs `npm install @agentclientprotocol/claude-agent-acp` into `~/.config/crewbot/agents/` (skipping its bundled Claude binary) and points it at your own `claude`.
+- **Adapters**: on first use the daemon runs `npm install` for the agent's adapter (`@agentclientprotocol/claude-agent-acp` or `@agentclientprotocol/codex-acp`) into `~/.config/crewbot/agents/`, skipping the agent binary it bundles, and points it at your own `claude` / `codex`. Grok needs no adapter.
 
 ## Files
 
@@ -129,11 +136,12 @@ Everything lives in `~/.config/crewbot/` (or `$XDG_CONFIG_HOME/crewbot/`):
 | `daemon.pid`, `state.json` | The running daemon's pid and status, used by `crewbot status` |
 | `logs/` | `daemon.log`, plus one log per bot's agent |
 | `agents/` | Agent adapters, installed from npm on first use |
+| `workspaces/` | Default folders for bots created without a working directory, one per bot. Deleted with the bot; folders you chose yourself are never touched |
 
 ## Uninstall
 
 ```bash
-crewbot logout          # stops CrewBot and unlinks this computer from your account
+crewbot logout          # stops CrewBot, unlinks this computer from your account and deletes its bots
 npm uninstall -g crewbot
 rm -rf ~/.config/crewbot
 ```

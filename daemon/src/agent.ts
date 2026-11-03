@@ -15,9 +15,9 @@ import type {
   SessionUpdate,
 } from '@crewbot/protocol';
 
-import { ensureClaudeAcp } from './adapters';
-import { findClaude } from './agents';
+import { agentLaunch } from './agents';
 import { LOG_DIR } from './paths';
+import { defaultCwd } from './workspaces';
 
 export type Emit = (botId: string, event: DaemonEventPayload) => void;
 
@@ -37,6 +37,24 @@ const FORWARDED_UPDATES = new Set<SessionUpdate['sessionUpdate']>([
   'plan',
 ]);
 
+/** 文字片段最多攒这么久、这么多字就上报一条 */
+const CHUNK_FLUSH_MS = 300;
+const CHUNK_FLUSH_CHARS = 8_000;
+
+/** 能合并的输出：回复或思考的纯文字片段 */
+type TextChunk = Extract<
+  SessionUpdate,
+  { sessionUpdate: 'agent_message_chunk' | 'agent_thought_chunk' }
+> & { content: { type: 'text'; text: string } };
+
+function isTextChunk(update: SessionUpdate): update is TextChunk {
+  return (
+    (update.sessionUpdate === 'agent_message_chunk' ||
+      update.sessionUpdate === 'agent_thought_chunk') &&
+    update.content.type === 'text'
+  );
+}
+
 /** 一个 bot 对应一个 agent 进程和一个 ACP 会话 */
 export class BotAgent {
   private proc?: ChildProcess;
@@ -45,6 +63,8 @@ export class BotAgent {
   private ready?: Promise<void>;
   private steeringSupported = false;
   private turnRunning = false;
+  /** 收到了、还在等 agent 准备好（拉起进程、恢复会话要几秒）的消息数 */
+  private starting = 0;
   private queue: { msgId: string; text: string }[] = [];
   /** 等用户审批的请求：requestId → 回复 agent */
   private permissions = new Map<
@@ -52,6 +72,8 @@ export class BotAgent {
     (res: RequestPermissionResponse) => void
   >();
   private idleTimer?: NodeJS.Timeout;
+  /** 还没上报的文字片段（见 bufferChunk） */
+  private pendingChunk?: { update: TextChunk; timer: NodeJS.Timeout };
 
   constructor(
     private bot: DaemonBot,
@@ -60,7 +82,7 @@ export class BotAgent {
 
   /** 用户发来一条消息：没有在跑就开新一轮；在跑就插入当前轮（不支持插入就排队） */
   get running(): boolean {
-    return this.turnRunning;
+    return this.turnRunning || this.starting > 0;
   }
 
   /** agent 进程还在 */
@@ -71,6 +93,7 @@ export class BotAgent {
   async handleMessage(bot: DaemonBot, msgId: string, text: string) {
     this.bot = bot;
     clearTimeout(this.idleTimer);
+    this.starting++;
     try {
       await this.ensureSession();
     } catch (err) {
@@ -80,6 +103,8 @@ export class BotAgent {
         message: (err as Error).message,
       });
       return;
+    } finally {
+      this.starting--;
     }
 
     if (this.turnRunning) {
@@ -128,10 +153,46 @@ export class BotAgent {
     }
   }
 
+  /**
+   * 文字片段攒一会儿再上报：agent 每几个字就发一条
+   * agent_message_chunk，原样上报会让服务器一轮存几百上千行。连续的同类文字片段
+   * 合并成一条，攒满 CHUNK_FLUSH_MS 或 CHUNK_FLUSH_CHARS、或来了别的类型的事件就上报
+   */
+  private bufferChunk(update: TextChunk) {
+    const pending = this.pendingChunk;
+    if (pending && pending.update.sessionUpdate === update.sessionUpdate) {
+      pending.update = {
+        ...pending.update,
+        content: {
+          ...pending.update.content,
+          text: pending.update.content.text + update.content.text,
+        },
+      };
+      if (pending.update.content.text.length >= CHUNK_FLUSH_CHARS) {
+        this.flushChunks();
+      }
+      return;
+    }
+    this.flushChunks();
+    this.pendingChunk = {
+      update,
+      timer: setTimeout(() => this.flushChunks(), CHUNK_FLUSH_MS),
+    };
+  }
+
+  private flushChunks() {
+    const pending = this.pendingChunk;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingChunk = undefined;
+    this.emit(this.bot.botId, { type: 'agent_update', update: pending.update });
+  }
+
   /** 结束当前这一轮（只报一次），然后跑排队的消息；没有就开始计空闲时间 */
   private endTurn(event: DaemonEventPayload) {
     if (!this.turnRunning) return;
     this.turnRunning = false;
+    this.flushChunks();
     this.cancelPermissions();
     this.emit(this.bot.botId, event);
     const next = this.queue.shift();
@@ -177,16 +238,15 @@ export class BotAgent {
 
   private async start() {
     const { botId, agentId, cwd } = this.bot;
-    if (agentId !== 'claude-code') throw new Error(`Unknown agent: ${agentId}`);
-    const claude = findClaude();
-    if (!claude) throw new Error('Claude Code is not installed on this device');
-    if (!existsSync(cwd)) throw new Error(`Directory not found: ${cwd}`);
+    // 默认目录第一次用到时创建；用户指定的目录必须已经存在
+    if (cwd === defaultCwd(botId)) mkdirSync(cwd, { recursive: true });
+    else if (!existsSync(cwd)) throw new Error(`Directory not found: ${cwd}`);
 
     mkdirSync(LOG_DIR, { recursive: true });
-    const entry = await ensureClaudeAcp();
-    const proc = spawn(process.execPath, [entry], {
+    const launch = await agentLaunch(agentId);
+    const proc = spawn(launch.command, launch.args, {
       cwd,
-      env: { ...process.env, CLAUDE_CODE_EXECUTABLE: claude },
+      env: launch.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     proc.stderr!.pipe(
@@ -209,12 +269,17 @@ export class BotAgent {
     this.conn = client({ name: 'crewbot' })
       .onNotification('session/update', (ctx) => {
         const { update } = ctx.params;
-        if (FORWARDED_UPDATES.has(update.sessionUpdate)) {
+        if (!FORWARDED_UPDATES.has(update.sessionUpdate)) return;
+        if (isTextChunk(update)) {
+          this.bufferChunk(update);
+        } else {
+          this.flushChunks();
           this.emit(botId, { type: 'agent_update', update });
         }
       })
       .onRequest('session/request_permission', (ctx) => {
         // 交给网页上的用户决定，等服务器把选择发回来
+        this.flushChunks();
         const requestId = randomUUID();
         const { toolCall, options } = ctx.params;
         this.emit(botId, {
@@ -258,6 +323,7 @@ export class BotAgent {
 
   stop() {
     clearTimeout(this.idleTimer);
+    this.flushChunks();
     this.cancelPermissions();
     const proc = this.proc;
     this.proc = undefined;

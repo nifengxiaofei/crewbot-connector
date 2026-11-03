@@ -15,8 +15,9 @@ import { deleteCredentials, type Credentials } from './credentials';
 import { getDeviceInfo } from './device';
 import { CONFIG_DIR, PID_PATH, STATE_PATH } from './paths';
 import { checkToken } from './server';
+import { pruneWorkspaces, removeWorkspace } from './workspaces';
 
-const PING_INTERVAL_MS = 30_000;
+const PING_INTERVAL_MS = 15_000;
 const PONG_TIMEOUT_MS = 10_000;
 const MAX_BACKOFF_MS = 30_000;
 /** 服务器收到同一台设备的新连接时，用这个关闭码关掉旧连接 */
@@ -38,6 +39,12 @@ const dseq = new Map<string, number>();
  */
 const outbox = new Map<string, Extract<DaemonToServer, { type: 'bot_event' }>[]>();
 const agents = new Map<string, BotAgent>();
+/**
+ * 最近收到的用户消息：服务器没收到 message_accepted 就会在重连后重发，按 msgId 去重。
+ * 只留最近这么多条
+ */
+const seenMsgIds = new Set<string>();
+const SEEN_MSG_LIMIT = 1000;
 
 /** 写给 crewbot status 看的运行状态 */
 export type DaemonState = {
@@ -75,11 +82,12 @@ function emit(botId: string, event: DaemonEventPayload) {
 function onMessage(msg: ServerToDaemon) {
   switch (msg.type) {
     case 'welcome': {
-      // 服务器那边已经没有的 bot（离线期间被删了）：关掉进程
+      // 服务器那边已经没有的 bot（离线期间被删了）：关掉进程，删掉默认目录
       const known = new Set(msg.bots.map((b) => b.botId));
-      for (const [botId, agent] of agents) {
-        if (!known.has(botId)) removeBot(botId, agent);
+      for (const botId of agents.keys()) {
+        if (!known.has(botId)) removeBot(botId);
       }
+      pruneWorkspaces(known);
       let resent = 0;
       for (const [botId, acked] of Object.entries(msg.ackedDseq)) {
         dseq.set(botId, Math.max(dseq.get(botId) ?? 0, acked));
@@ -98,12 +106,15 @@ function onMessage(msg: ServerToDaemon) {
     case 'cancel':
       agents.get(msg.botId)?.cancel();
       return;
-    case 'bot_removed': {
-      const agent = agents.get(msg.botId);
-      if (agent) removeBot(msg.botId, agent);
+    case 'bot_removed':
+      removeBot(msg.botId);
       return;
-    }
     case 'message': {
+      if (seenMsgIds.has(msg.msgId)) return;
+      seenMsgIds.add(msg.msgId);
+      if (seenMsgIds.size > SEEN_MSG_LIMIT) {
+        seenMsgIds.delete(seenMsgIds.values().next().value!);
+      }
       const { botId } = msg.bot;
       let agent = agents.get(botId);
       if (!agent) {
@@ -116,11 +127,13 @@ function onMessage(msg: ServerToDaemon) {
   }
 }
 
-function removeBot(botId: string, agent: BotAgent) {
-  agent.stop();
+/** bot 被删了：先关进程，再删它的默认目录（用户指定的目录不动） */
+function removeBot(botId: string) {
+  agents.get(botId)?.stop();
   agents.delete(botId);
   outbox.delete(botId);
   dseq.delete(botId);
+  removeWorkspace(botId);
 }
 
 /** 连一次，直到断开；返回关闭码和原因 */
@@ -154,9 +167,19 @@ function connectOnce(
         type: 'hello',
         protocolVersion: PROTOCOL_VERSION,
         device: await getDeviceInfo(),
-        runningBots: [...agents]
-          .filter(([, agent]) => agent.running)
-          .map(([botId]) => botId),
+        // 还在跑的轮次（包括消息收到了、agent 还在准备的），以及结果还没传上去的
+        // 轮次（断线期间结束了，turn_end 还在待传队列里）：都不能让服务器判中断，
+        // welcome 后补传就能收尾
+        runningBots: [
+          ...new Set([
+            ...[...agents]
+              .filter(([, agent]) => agent.running)
+              .map(([botId]) => botId),
+            ...[...outbox]
+              .filter(([, box]) => box.length > 0)
+              .map(([botId]) => botId),
+          ]),
+        ],
       });
       pingTimer = setInterval(() => {
         saveState({});

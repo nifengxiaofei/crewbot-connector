@@ -1,4 +1,4 @@
-// daemon 和服务器共用的对象。
+// 共用的基础对象：ACP 类型和 daemon 上报的设备信息。
 import type {
   PermissionOption,
   SessionUpdate,
@@ -38,5 +38,7 @@ export const deviceInfoSchema = z.object({
   arch: z.string(),
   daemonVersion: z.string(),
   agents: z.array(agentInfoSchema),
+  /** bot 的默认工作目录放在这下面（<workspacesDir>/<botId>）；旧版 daemon 没有 */
+  workspacesDir: z.string().optional(),
 });
 export type DeviceInfo = z.infer<typeof deviceInfoSchema>;

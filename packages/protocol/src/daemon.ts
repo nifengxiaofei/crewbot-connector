@@ -1,5 +1,5 @@
 // daemon ⇄ 服务器
-// 心跳不走这里：daemon 每 30 秒发纯文本 "ping"，服务器直接回 "pong"。
+// 心跳不走这里：daemon 每 15 秒发纯文本 "ping"，服务器直接回 "pong"。
 import { z } from 'zod';
 
 import {
@@ -48,8 +48,9 @@ const daemonEventPayloadSchema = z.discriminatedUnion('type', [
 
 export const daemonToServerSchema = z.discriminatedUnion('type', [
   /**
-   * 连上后第一条：上报设备信息，以及哪些 bot 的这一轮还在执行。
-   * daemon 重启后之前的轮次都没了，服务器据此把它们标为中断
+   * 连上后第一条：上报设备信息，以及哪些 bot 的这一轮 daemon 还负责：还在执行，
+   * 或者已经结束但结果还没传上去（welcome 后补传收尾）。daemon 重启后之前的
+   * 轮次都没了，服务器据此把它们标为中断
    */
   z.object({
     type: z.literal('hello'),
@@ -88,7 +89,10 @@ export type ServerToDaemon =
       bots: DaemonBot[];
       ackedDseq: Record<string, number>;
     }
-  /** 用户发了消息：daemon 决定 session/prompt 还是 steering */
+  /**
+   * 用户发了消息：daemon 决定 session/prompt 还是 steering。
+   * 服务器收到 message_accepted 之前，daemon 每次重连都会再发一遍，daemon 按 msgId 去重
+   */
   | { type: 'message'; bot: DaemonBot; msgId: string; text: string }
   | {
       type: 'permission_response';

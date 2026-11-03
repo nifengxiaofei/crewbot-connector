@@ -18,10 +18,11 @@ Usage: crewbot <command>
   restart      Restart the background daemon
   status       Show whether crewbot is running, connected, and which agents it found
   logs [-f]    Show the daemon log (-f to follow)
-  logout       Stop crewbot and unlink this computer
+  logout       Stop crewbot, unlink this computer and delete its bots
 
 Options:
   start --foreground   Run in the foreground instead (for debugging or systemd)
+  logout --yes         Don't ask for confirmation
 
 Then open https://super-agent.team/crew`;
 
@@ -45,7 +46,7 @@ try {
       await logs({ follow: args.includes('-f') || args.includes('--follow') });
       break;
     case 'logout':
-      await logout();
+      await logout({ yes: args.includes('--yes') || args.includes('-y') });
       break;
     case '__run':
       await runInBackground();

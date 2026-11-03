@@ -14,6 +14,7 @@ import {
   statSync,
   watchFile,
 } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { PROTOCOL_VERSION } from '@crewbot/protocol';
 
@@ -25,17 +26,23 @@ import {
 import { runDaemon, type DaemonState } from './daemon';
 import { getDeviceInfo } from './device';
 import { login } from './login';
-import { DAEMON_LOG, LOG_DIR, PID_PATH, STATE_PATH } from './paths';
+import {
+  DAEMON_LOG,
+  LOG_DIR,
+  PID_PATH,
+  STATE_PATH,
+  WORKSPACES_DIR,
+} from './paths';
 import { checkToken, revokeToken } from './server';
+import { listWorkspaces } from './workspaces';
 
 const START_WAIT_MS = 15_000;
 const STOP_WAIT_MS = 5_000;
 
 const AGENT_STATUS = {
   ready: '✓ ready',
-  not_logged_in: '✗ not logged in (run `claude` and log in first)',
-  unavailable:
-    '✗ not available (install Claude Code: https://claude.com/claude-code)',
+  not_logged_in: '✗ not logged in (open it in a terminal and log in first)',
+  unavailable: '✗ not installed',
 } as const;
 
 // ---------- 后台进程 ----------
@@ -236,7 +243,31 @@ export async function logs(options: { follow: boolean }) {
   await new Promise(() => {}); // Ctrl+C 退出
 }
 
-export async function logout() {
+async function confirm(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // 不是终端（输入被关掉）时读到空，按“不继续”处理
+  const answer = await rl.question(question).catch(() => '');
+  rl.close();
+  return /^y(es)?$/i.test(answer.trim());
+}
+
+/** 注销：服务器上这台设备和它的 bot 都会删掉，bot 的默认目录跟着删，所以先确认 */
+export async function logout({ yes }: { yes: boolean }) {
+  const workspaces = listWorkspaces();
+  if (!yes) {
+    console.log(
+      'This unlinks this computer and deletes its bots from your account.'
+    );
+    if (workspaces.length > 0) {
+      console.log(
+        `${workspaces.length} bot folder(s) in ${WORKSPACES_DIR} will be deleted too.`
+      );
+    }
+    if (!(await confirm('Continue? [y/N] '))) {
+      console.log('Cancelled.');
+      return;
+    }
+  }
   await stop();
   const creds = await readCredentials();
   if (creds && !(await revokeToken(creds.server, creds.token))) {
@@ -245,6 +276,7 @@ export async function logout() {
     );
   }
   await deleteCredentials();
+  rmSync(WORKSPACES_DIR, { recursive: true, force: true });
   console.log('✓ Logged out. This computer is no longer linked.');
 }
 

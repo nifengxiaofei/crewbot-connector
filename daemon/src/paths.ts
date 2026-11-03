@@ -16,3 +16,5 @@ export const LOG_DIR = join(CONFIG_DIR, 'logs');
 export const DAEMON_LOG = join(LOG_DIR, 'daemon.log');
 /** 按需安装的 agent 适配器 */
 export const AGENTS_DIR = join(CONFIG_DIR, 'agents');
+/** bot 的默认工作目录（见 workspaces.ts） */
+export const WORKSPACES_DIR = join(CONFIG_DIR, 'workspaces');
