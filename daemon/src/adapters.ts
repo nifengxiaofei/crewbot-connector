@@ -38,7 +38,12 @@ function npmInstall(dir: string, spec: string): Promise<void> {
         '--loglevel=error',
         spec,
       ],
-      { cwd: dir, stdio: ['ignore', 'ignore', 'pipe'], shell: process.platform === 'win32' }
+      {
+        cwd: dir,
+        stdio: ['ignore', 'ignore', 'pipe'],
+        shell: process.platform === 'win32',
+        windowsHide: true,
+      }
     );
     let stderr = '';
     proc.stderr.on('data', (d) => (stderr += d));

@@ -9,10 +9,12 @@ import {
   type ClientConnection,
   type RequestPermissionResponse,
 } from '@agentclientprotocol/sdk';
-import type {
-  DaemonBot,
-  DaemonEventPayload,
-  SessionUpdate,
+import {
+  AUTONOMY_MODES,
+  type BotAutonomy,
+  type DaemonBot,
+  type DaemonEventPayload,
+  type SessionUpdate,
 } from '@crewbot/protocol';
 
 import { agentLaunch } from './agents';
@@ -74,6 +76,8 @@ export class BotAgent {
   private idleTimer?: NodeJS.Timeout;
   /** 还没上报的文字片段（见 bufferChunk） */
   private pendingChunk?: { update: TextChunk; timer: NodeJS.Timeout };
+  /** 当前会话上已经设好的 ACP 模式 id（见 applyAutonomy） */
+  private appliedMode?: string;
 
   constructor(
     private bot: DaemonBot,
@@ -96,6 +100,8 @@ export class BotAgent {
     this.starting++;
     try {
       await this.ensureSession();
+      // 自主程度在上次会话建立后改过（当时切失败、或 daemon 那会儿不在线）：现在切，切不了就报错
+      await this.applyAutonomy();
     } catch (err) {
       this.emit(bot.botId, {
         type: 'error',
@@ -204,6 +210,44 @@ export class BotAgent {
     }
   }
 
+  /** bot 的设置改了（自主程度）：进程还活着就马上切模式；切不了只记日志，下次来消息时再报错 */
+  updateBot(bot: DaemonBot) {
+    this.bot = bot;
+    if (!this.conn || !this.sessionId) return;
+    void this.applyAutonomy().catch((err: Error) =>
+      console.error(`[${bot.botId}] ${err.message}`)
+    );
+  }
+
+  /**
+   * 把 bot 的自主程度设到 ACP 会话上。
+   * 老服务器不发 autonomy、agent 不在映射表里（Grok）、或已经是这个模式：不调
+   */
+  private async applyAutonomy() {
+    const modes = AUTONOMY_MODES[this.bot.agentId] as
+      Record<BotAutonomy, string> | undefined;
+    const modeId = this.bot.autonomy && modes?.[this.bot.autonomy];
+    if (
+      !modeId ||
+      modeId === this.appliedMode ||
+      !this.conn ||
+      !this.sessionId
+    ) {
+      return;
+    }
+    try {
+      await this.conn.agent.request('session/set_mode', {
+        sessionId: this.sessionId,
+        modeId,
+      });
+    } catch (err) {
+      throw new Error(
+        `Autonomy level "${this.bot.autonomy}" is not available for this agent: ${(err as Error).message}`
+      );
+    }
+    this.appliedMode = modeId;
+  }
+
   /** 用户在网页上选了审批选项 */
   resolvePermission(requestId: string, optionId: string) {
     const resolve = this.permissions.get(requestId);
@@ -248,6 +292,7 @@ export class BotAgent {
       cwd,
       env: launch.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true, // Windows：后台 daemon 没有控制台，不加会弹出窗口
     });
     proc.stderr!.pipe(
       createWriteStream(join(LOG_DIR, `${botId}.log`), { flags: 'a' })
@@ -300,6 +345,7 @@ export class BotAgent {
     })) as { _meta?: { steering?: { supported?: boolean } } };
     this.steeringSupported = init._meta?.steering?.supported === true;
 
+    this.appliedMode = undefined;
     if (this.bot.sessionId) {
       try {
         await this.conn.agent.request('session/resume', {
@@ -308,17 +354,20 @@ export class BotAgent {
           mcpServers: [],
         });
         this.sessionId = this.bot.sessionId;
-        return;
       } catch {
         // 恢复不了（比如会话文件被删了），新建一个
       }
     }
-    const created = await this.conn.agent.request('session/new', {
-      cwd,
-      mcpServers: [],
-    });
-    this.sessionId = created.sessionId;
-    this.emit(botId, { type: 'session', sessionId: created.sessionId });
+    if (!this.sessionId) {
+      const created = await this.conn.agent.request('session/new', {
+        cwd,
+        mcpServers: [],
+      });
+      this.sessionId = created.sessionId;
+      this.emit(botId, { type: 'session', sessionId: created.sessionId });
+    }
+    // 新建的会话落在 agent 自己的默认模式，恢复的沿用上次的：都要设成 bot 现在的自主程度
+    await this.applyAutonomy();
   }
 
   stop() {
@@ -329,6 +378,8 @@ export class BotAgent {
     this.proc = undefined;
     this.conn = undefined;
     this.ready = undefined;
+    this.sessionId = undefined;
+    this.appliedMode = undefined;
     proc?.kill();
   }
 }

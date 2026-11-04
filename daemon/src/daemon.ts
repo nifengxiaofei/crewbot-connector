@@ -106,6 +106,9 @@ function onMessage(msg: ServerToDaemon) {
     case 'cancel':
       agents.get(msg.botId)?.cancel();
       return;
+    case 'bot_updated':
+      agents.get(msg.bot.botId)?.updateBot(msg.bot);
+      return;
     case 'bot_removed':
       removeBot(msg.botId);
       return;

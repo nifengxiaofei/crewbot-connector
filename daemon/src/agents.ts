@@ -1,6 +1,6 @@
-import { execFile } from 'node:child_process';
-import { accessSync, constants } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { exec, execFile } from 'node:child_process';
+import { accessSync, constants, readFileSync } from 'node:fs';
+import { delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentInfo } from '@crewbot/protocol';
 
@@ -8,13 +8,26 @@ import { CLAUDE_ACP, CODEX_ACP, ensureAdapter } from './adapters';
 import { shellEnv } from './shell-env';
 
 const run = promisify(execFile);
+const runInShell = promisify(exec);
 const TIMEOUT_MS = 10_000;
+
+/**
+ * 执行 agent 的命令行。windowsHide：后台 daemon 没有控制台，不加的话 Windows 上每次
+ * 都会弹出一个控制台窗口。.cmd / .bat（npm 在 Windows 上装的命令）Node 不能直接执行，
+ * 交给 cmd.exe；参数都是写死的，不用转义
+ */
+const runAgent = (bin: string, args: string[], env: NodeJS.ProcessEnv) => {
+  const options = { timeout: TIMEOUT_MS, env, windowsHide: true };
+  return /\.(cmd|bat)$/i.test(bin)
+    ? runInShell(`"${bin}" ${args.join(' ')}`, options)
+    : run(bin, args, options);
+};
 
 /** 退出码不是 0 也照样拿 stdout */
 const runAnyway = (bin: string, args: string[], env: NodeJS.ProcessEnv) =>
-  run(bin, args, { timeout: TIMEOUT_MS, env }).catch(
-    (err: { stdout?: string }) => ({ stdout: err.stdout ?? '' })
-  );
+  runAgent(bin, args, env).catch((err: { stdout?: string }) => ({
+    stdout: err.stdout ?? '',
+  }));
 
 /** 拉起 agent 进程（ACP over stdio）的命令 */
 export type AgentLaunch = {
@@ -59,7 +72,7 @@ const AGENTS: Record<string, AgentDef> = {
     version: (out) => out.split(' ').at(-1), // "codex-cli 0.166.0"
     // 没登录时退出码是 1
     loggedIn: (bin, env) =>
-      run(bin, ['login', 'status'], { timeout: TIMEOUT_MS, env }).then(
+      runAgent(bin, ['login', 'status'], env).then(
         () => true,
         () => false
       ),
@@ -97,13 +110,35 @@ function findOnPath(name: string, env: NodeJS.ProcessEnv): string | null {
       const file = join(dir, name + ext);
       try {
         accessSync(file, constants.X_OK);
-        return file;
+        return unwrapCmdShim(file);
       } catch {
         // 继续找
       }
     }
   }
   return null;
+}
+
+/**
+ * npm 在 Windows 上装的命令是 .cmd 包装脚本。包装的是 .exe 时（比如 npm 装的
+ * Claude Code）直接用那个 .exe：适配器拉起 agent 不经过 cmd.exe，执行不了 .cmd
+ */
+function unwrapCmdShim(file: string): string {
+  if (!/\.cmd$/i.test(file)) return file;
+  try {
+    // 包装脚本里目标写成 "%dp0%\node_modules\...\claude.exe"
+    const target = /"%dp0%\\(node_modules\\[^"]+\.exe)"/i.exec(
+      readFileSync(file, 'utf8')
+    )?.[1];
+    if (target) {
+      const exe = join(dirname(file), target);
+      accessSync(exe, constants.X_OK);
+      return exe;
+    }
+  } catch {
+    // 读不了或目标不在：还用 .cmd
+  }
+  return file;
 }
 
 async function detect(
@@ -115,10 +150,7 @@ async function detect(
   const bin = findOnPath(def.bin, env);
   if (!bin) return info;
   try {
-    const { stdout } = await run(bin, ['--version'], {
-      timeout: TIMEOUT_MS,
-      env,
-    });
+    const { stdout } = await runAgent(bin, ['--version'], env);
     info.version = def.version(stdout.trim());
     info.status = (await def.loggedIn(bin, env)) ? 'ready' : 'not_logged_in';
   } catch {

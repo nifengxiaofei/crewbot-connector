@@ -7,6 +7,7 @@ import {
   permissionOptionSchema,
   sessionUpdateSchema,
   toolCallSchema,
+  type BotAutonomy,
   type StopReason,
 } from './common';
 
@@ -76,6 +77,8 @@ export type DaemonBot = {
   agentId: string;
   cwd: string;
   sessionId: string | null; // 没有就新建会话
+  /** 自主程度（审批模式）；老服务器不发，daemon 就不设模式 */
+  autonomy?: BotAutonomy;
 };
 
 export type ServerToDaemon =
@@ -102,5 +105,7 @@ export type ServerToDaemon =
     }
   /** 用户点了停止：daemon 发 session/cancel，这一轮以 turn_end(cancelled) 结束 */
   | { type: 'cancel'; botId: string }
+  /** bot 的设置改了（目前只有自主程度）：进程还活着就马上切会话模式 */
+  | { type: 'bot_updated'; bot: DaemonBot }
   /** bot 被删除：daemon 关掉对应进程 */
   | { type: 'bot_removed'; botId: string };

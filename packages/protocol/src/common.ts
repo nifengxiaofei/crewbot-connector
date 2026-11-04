@@ -42,3 +42,32 @@ export const deviceInfoSchema = z.object({
   workspacesDir: z.string().optional(),
 });
 export type DeviceInfo = z.infer<typeof deviceInfoSchema>;
+
+// ---------- bot 的自主程度（审批模式） ----------
+
+/**
+ * read_only：只看不改；workspace：自己目录里的文件改动直接做，命令要问；
+ * auto：agent 自带的审查器判断，只问“可能不安全”的；full：什么都不问
+ */
+export const BOT_AUTONOMY = ['read_only', 'workspace', 'auto', 'full'] as const;
+export type BotAutonomy = (typeof BOT_AUTONOMY)[number];
+export const DEFAULT_AUTONOMY: BotAutonomy = 'auto';
+
+/**
+ * 每种 agent 下，自主程度对应的 ACP 会话模式 id（daemon 用 `session/set_mode` 设）。
+ * 不在表里的 agent（Grok 的 ACP 没有审批模式）忽略这个设置，按它自己的行为
+ */
+export const AUTONOMY_MODES: Record<string, Record<BotAutonomy, string>> = {
+  'claude-code': {
+    read_only: 'plan',
+    workspace: 'acceptEdits',
+    auto: 'auto',
+    full: 'bypassPermissions',
+  },
+  codex: {
+    read_only: 'read-only',
+    workspace: 'workspace-write',
+    auto: 'agent',
+    full: 'agent-full-access',
+  },
+};

@@ -117,6 +117,7 @@ export async function start(options: { foreground: boolean }) {
     detached: true,
     stdio: ['ignore', out, out],
     env: process.env,
+    windowsHide: true, // Windows：不弹控制台窗口
   });
   child.unref();
   closeSync(out);

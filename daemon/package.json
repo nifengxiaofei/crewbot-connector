@@ -1,6 +1,6 @@
 {
   "name": "crewbot",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Run the coding agents on your computers from anywhere — the local daemon for super-agent.team",
   "keywords": [
     "crewbot",
