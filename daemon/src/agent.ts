@@ -7,10 +7,12 @@ import {
   client,
   ndJsonStream,
   type ClientConnection,
+  type NewSessionRequest,
   type RequestPermissionResponse,
 } from '@agentclientprotocol/sdk';
 import {
   AUTONOMY_MODES,
+  AUTONOMY_SESSION_META,
   type BotAutonomy,
   type DaemonBot,
   type DaemonEventPayload,
@@ -76,7 +78,10 @@ export class BotAgent {
   private idleTimer?: NodeJS.Timeout;
   /** 还没上报的文字片段（见 bufferChunk） */
   private pendingChunk?: { update: TextChunk; timer: NodeJS.Timeout };
-  /** 当前会话上已经设好的 ACP 模式 id（见 applyAutonomy） */
+  /**
+   * 当前会话上已经生效的模式：`session/set_mode` 设的模式 id（见 applyAutonomy），
+   * 或建会话时给的 `_meta` 开关名（见 sessionMetaKey；没给就是空串）
+   */
   private appliedMode?: string;
 
   constructor(
@@ -204,26 +209,65 @@ export class BotAgent {
     const next = this.queue.shift();
     if (next) {
       void this.runTurn(next.msgId, next.text);
+    } else if (this.sessionStale) {
+      // 这一轮跑着的时候改了自主程度：关掉进程，下次来消息时带新模式恢复会话
+      this.stop();
     } else {
       clearTimeout(this.idleTimer);
       this.idleTimer = setTimeout(() => this.stop(), IDLE_EXIT_MS);
     }
   }
 
-  /** bot 的设置改了（自主程度）：进程还活着就马上切模式；切不了只记日志，下次来消息时再报错 */
+  /**
+   * bot 的设置改了（自主程度）：进程还活着就马上切模式；切不了只记日志，下次来消息时再报错。
+   * 模式只能在建会话时给的 agent（Grok）：空闲就关掉进程，下次来消息时带新模式恢复会话；
+   * 在跑就等这一轮结束（见 endTurn）
+   */
   updateBot(bot: DaemonBot) {
     this.bot = bot;
     if (!this.conn || !this.sessionId) return;
+    if (this.sessionStale) {
+      if (!this.running) this.stop();
+      return;
+    }
     void this.applyAutonomy().catch((err: Error) =>
       console.error(`[${bot.botId}] ${err.message}`)
     );
   }
 
   /**
+   * 审批模式只能在建会话时用 `_meta` 开关给的 agent（Grok）：要给的开关名。
+   * 这一档它没有就是空串（不给，落在 agent 自己的默认模式）；别的 agent 是 undefined
+   */
+  private sessionMetaKey(): string | undefined {
+    const meta = AUTONOMY_SESSION_META[this.bot.agentId];
+    if (!meta) return undefined;
+    return (this.bot.autonomy && meta[this.bot.autonomy]) || '';
+  }
+
+  /** 会话建立后又改了自主程度，而这种 agent 只能在建会话时设：要重建会话（恢复会话保留上下文） */
+  private get sessionStale(): boolean {
+    const key = this.sessionMetaKey();
+    return (
+      key !== undefined &&
+      this.sessionId !== undefined &&
+      key !== this.appliedMode
+    );
+  }
+
+  /**
    * 把 bot 的自主程度设到 ACP 会话上。
-   * 老服务器不发 autonomy、agent 不在映射表里（Grok）、或已经是这个模式：不调
+   * 老服务器不发 autonomy、agent 不在映射表里、或已经是这个模式：不调。
+   * 模式在建会话时给的 agent（Grok）：改过就重建会话，在跑就等这一轮结束
    */
   private async applyAutonomy() {
+    if (this.sessionMetaKey() !== undefined) {
+      if (this.sessionStale && !this.turnRunning) {
+        this.stop();
+        await this.ensureSession();
+      }
+      return;
+    }
     const modes = AUTONOMY_MODES[this.bot.agentId] as
       Record<BotAutonomy, string> | undefined;
     const modeId = this.bot.autonomy && modes?.[this.bot.autonomy];
@@ -346,12 +390,18 @@ export class BotAgent {
     this.steeringSupported = init._meta?.steering?.supported === true;
 
     this.appliedMode = undefined;
+    // Grok 的审批模式只能在这里给：新建和恢复都带上
+    const metaKey = this.sessionMetaKey();
+    const params: NewSessionRequest = {
+      cwd,
+      mcpServers: [],
+      ...(metaKey ? { _meta: { [metaKey]: true } } : {}),
+    };
     if (this.bot.sessionId) {
       try {
         await this.conn.agent.request('session/resume', {
           sessionId: this.bot.sessionId,
-          cwd,
-          mcpServers: [],
+          ...params,
         });
         this.sessionId = this.bot.sessionId;
       } catch {
@@ -359,15 +409,16 @@ export class BotAgent {
       }
     }
     if (!this.sessionId) {
-      const created = await this.conn.agent.request('session/new', {
-        cwd,
-        mcpServers: [],
-      });
+      const created = await this.conn.agent.request('session/new', params);
       this.sessionId = created.sessionId;
       this.emit(botId, { type: 'session', sessionId: created.sessionId });
     }
-    // 新建的会话落在 agent 自己的默认模式，恢复的沿用上次的：都要设成 bot 现在的自主程度
-    await this.applyAutonomy();
+    if (metaKey !== undefined) {
+      this.appliedMode = metaKey;
+    } else {
+      // 新建的会话落在 agent 自己的默认模式，恢复的沿用上次的：都要设成 bot 现在的自主程度
+      await this.applyAutonomy();
+    }
   }
 
   stop() {

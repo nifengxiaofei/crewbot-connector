@@ -10,7 +10,13 @@ import { join } from 'node:path';
 
 import { AGENTS_DIR } from './paths';
 
-type Adapter = { name: string; version: string; dir: string };
+type Adapter = {
+  name: string;
+  version: string;
+  dir: string;
+  /** 装好后要改的地方（见 patchCodexNetwork） */
+  patch?: (entry: string) => void;
+};
 
 /** 验证过的版本，升级前先用 spike/acp.ts 回归 */
 export const CLAUDE_ACP: Adapter = {
@@ -22,7 +28,34 @@ export const CODEX_ACP: Adapter = {
   name: '@agentclientprotocol/codex-acp',
   version: '2.5.0',
   dir: 'codex-acp',
+  patch: patchCodexNetwork,
 };
+
+/**
+ * codex-acp 把每个模式的沙箱策略写死在代码里，每一轮都原样发给 Codex，所以 Codex 自己的
+ * 配置（config.toml、CODEX_CONFIG）管不到。“自动审查”（agent）这一档写的是不联网：
+ * 联网命令在沙箱里静默失败，不问也不报。这里把它改成联网，联网命令和别的一样交给
+ * Codex 的审查器把关。只改 crewbot 自己装的这一份，不碰用户的 codex；“工作区内自动”
+ * 和“只看不改”不动。整段只能出现一次，否则（适配器换了写法）不改，记一条日志
+ */
+function patchCodexNetwork(entry: string) {
+  const before = `    "on-request",
+    "auto_review",
+    {
+      type: "workspaceWrite",
+      writableRoots: [],
+      networkAccess: false,`;
+  const after = before.replace('networkAccess: false', 'networkAccess: true');
+  const code = readFileSync(entry, 'utf8');
+  if (code.includes(after)) return; // 已经改过
+  if (code.split(before).length !== 2) {
+    console.error(
+      `${CODEX_ACP.name}: auto review mode not found, leaving the network off`
+    );
+    return;
+  }
+  writeFileSync(entry, code.replace(before, after));
+}
 
 const installing = new Map<string, Promise<string>>();
 
@@ -77,6 +110,7 @@ export function ensureAdapter(adapter: Adapter): Promise<string> {
       }
       await npmInstall(dir, `${adapter.name}@${adapter.version}`);
     }
+    adapter.patch?.(entry);
     return entry;
   })().catch((err) => {
     installing.delete(adapter.name); // 下次再试

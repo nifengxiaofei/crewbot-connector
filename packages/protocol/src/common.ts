@@ -54,8 +54,7 @@ export type BotAutonomy = (typeof BOT_AUTONOMY)[number];
 export const DEFAULT_AUTONOMY: BotAutonomy = 'auto';
 
 /**
- * 每种 agent 下，自主程度对应的 ACP 会话模式 id（daemon 用 `session/set_mode` 设）。
- * 不在表里的 agent（Grok 的 ACP 没有审批模式）忽略这个设置，按它自己的行为
+ * 每种 agent 下，自主程度对应的 ACP 会话模式 id（daemon 用 `session/set_mode` 设）
  */
 export const AUTONOMY_MODES: Record<string, Record<BotAutonomy, string>> = {
   'claude-code': {
@@ -71,3 +70,22 @@ export const AUTONOMY_MODES: Record<string, Record<BotAutonomy, string>> = {
     full: 'agent-full-access',
   },
 };
+
+/**
+ * 没有会话模式、只能在建会话（`session/new` / `session/resume`）时用 `_meta` 开关设
+ * 审批模式的 agent：自主程度 → 开关名，daemon 传 `_meta: { [开关]: true }`。
+ * 只对这一个会话生效，不碰机器上 agent 自己的配置。
+ * Grok 只有这两个开关，所以只有这两档
+ */
+export const AUTONOMY_SESSION_META: Record<
+  string,
+  Partial<Record<BotAutonomy, string>>
+> = {
+  grok: { auto: 'autoMode', full: 'yoloMode' },
+};
+
+/** 这种 agent 能设的自主程度（按 BOT_AUTONOMY 的顺序）；一档都不支持的 agent 是空数组 */
+export function supportedAutonomy(agentId: string): BotAutonomy[] {
+  const modes = AUTONOMY_MODES[agentId] ?? AUTONOMY_SESSION_META[agentId];
+  return modes ? BOT_AUTONOMY.filter((level) => level in modes) : [];
+}
