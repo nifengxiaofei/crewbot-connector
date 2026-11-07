@@ -69,6 +69,12 @@ CrewBot 不自带 agent，它驱动的是你电脑上已有的那一份，沿用
 
 装好后**重新打开一个终端**，这样才能找到它的命令；第 3 步会检查 CrewBot 能不能找到它。如果你是在 shell 配置文件（比如 `~/.zshrc`）里给 agent 配的 API key，CrewBot 也能用上：在 macOS 和 Linux 上，它在检测和启动 agent 之前会先读取登录 shell 的环境变量。
 
+**Windows**：Claude Code 的安装脚本把 `claude.exe` 装在 `%USERPROFILE%\.local\bin`，但不会把这个目录加进 PATH，所以 PowerShell 找不到 `claude`，`crewbot status` 也显示 `✗ not installed`。执行一次下面的命令把它加进去，然后重新打开 PowerShell：
+
+```powershell
+[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ";$env:USERPROFILE\.local\bin", 'User')
+```
+
 ### 3. 安装 CrewBot
 
 ```bash

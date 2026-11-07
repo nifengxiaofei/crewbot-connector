@@ -69,6 +69,12 @@ CrewBot doesn't come with an agent of its own: it drives the one already on your
 
 Then **open a new terminal** so the command is found; step 3 checks that CrewBot sees it. If you set an agent up with an API key in your shell profile (such as `~/.zshrc`), CrewBot picks it up too: on macOS and Linux it reads your login shell's environment before checking or starting an agent.
 
+**Windows**: Claude Code's installer puts `claude.exe` in `%USERPROFILE%\.local\bin` but doesn't add that folder to PATH, so PowerShell can't find `claude` and `crewbot status` shows `✗ not installed`. Add it once, then open a new PowerShell:
+
+```powershell
+[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ";$env:USERPROFILE\.local\bin", 'User')
+```
+
 ### 3. Install CrewBot
 
 ```bash
