@@ -72,7 +72,7 @@ npm install -g crewbot@latest --registry https://registry.npmjs.org/
 ## How it works
 
 - CrewBot opens one outgoing connection to super-agent.team. It never listens on a port, so it works behind routers and firewalls.
-- When you message a bot, CrewBot starts that bot's agent in the bot's folder and resumes its session. Agents that sit idle for 15 minutes are shut down and resumed on the next message.
+- A bot can have several sessions, and they can run at the same time. When you message one, CrewBot starts an agent for that session in the bot's folder and resumes it. Agents that sit idle for 15 minutes are shut down and resumed on the next message.
 - When an agent wants to edit files or run a command that needs permission, the request shows up in your browser for you to allow or reject.
 
 ## Files
@@ -82,7 +82,7 @@ Everything lives in `~/.config/crewbot/` (or `$XDG_CONFIG_HOME/crewbot/`):
 | Path | Contents |
 | --- | --- |
 | `credentials.json` | This computer's link to your account (readable only by you) |
-| `logs/` | `daemon.log`, plus one log per bot's agent |
+| `logs/` | `daemon.log`, plus one log per session's agent |
 | `agents/` | Agent adapters, installed from npm on first use |
 | `workspaces/` | Default folders for bots created without a working directory, one per bot. Deleted with the bot; folders you chose yourself are never touched |
 

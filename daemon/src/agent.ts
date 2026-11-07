@@ -23,9 +23,13 @@ import { agentLaunch } from './agents';
 import { LOG_DIR } from './paths';
 import { defaultCwd } from './workspaces';
 
-export type Emit = (botId: string, event: DaemonEventPayload) => void;
+export type Emit = (
+  botId: string,
+  taskId: string,
+  event: DaemonEventPayload
+) => void;
 
-/** bot 空闲这么久就关掉 agent 进程，下次来消息再拉起并恢复会话 */
+/** 会话空闲这么久就关掉它的 agent 进程，下次来消息再拉起并恢复会话 */
 const IDLE_EXIT_MS = 15 * 60_000;
 
 const CANCELLED: RequestPermissionResponse = {
@@ -59,11 +63,17 @@ function isTextChunk(update: SessionUpdate): update is TextChunk {
   );
 }
 
-/** 一个 bot 对应一个 agent 进程和一个 ACP 会话 */
-export class BotAgent {
+/**
+ * 一个会话对应一个 agent 进程和一个 ACP 会话。
+ * 同一个 bot 的几个会话各自一个进程，共用 bot 的工作目录，可以同时跑
+ */
+export class TaskAgent {
   private proc?: ChildProcess;
   private conn?: ClientConnection;
+  /** 进程里正在用的 ACP 会话 */
   private sessionId?: string;
+  /** 下次拉起进程时要恢复的会话：服务器发来的，或者这里新建后上报过的；还没建过是 null */
+  private savedSessionId: string | null = null;
   private ready?: Promise<void>;
   private steeringSupported = false;
   private turnRunning = false;
@@ -86,8 +96,17 @@ export class BotAgent {
 
   constructor(
     private bot: DaemonBot,
+    readonly taskId: string,
     private emit: Emit
   ) {}
+
+  get botId(): string {
+    return this.bot.botId;
+  }
+
+  private report(event: DaemonEventPayload) {
+    this.emit(this.bot.botId, this.taskId, event);
+  }
 
   /** 用户发来一条消息：没有在跑就开新一轮；在跑就插入当前轮（不支持插入就排队） */
   get running(): boolean {
@@ -99,8 +118,14 @@ export class BotAgent {
     return this.proc !== undefined;
   }
 
-  async handleMessage(bot: DaemonBot, msgId: string, text: string) {
+  async handleMessage(
+    bot: DaemonBot,
+    sessionId: string | null,
+    msgId: string,
+    text: string
+  ) {
     this.bot = bot;
+    if (sessionId) this.savedSessionId = sessionId;
     clearTimeout(this.idleTimer);
     this.starting++;
     try {
@@ -108,7 +133,7 @@ export class BotAgent {
       // 自主程度在上次会话建立后改过（当时切失败、或 daemon 那会儿不在线）：现在切，切不了就报错
       await this.applyAutonomy();
     } catch (err) {
-      this.emit(bot.botId, {
+      this.report({
         type: 'error',
         msgId,
         message: (err as Error).message,
@@ -138,7 +163,7 @@ export class BotAgent {
         return;
       }
       if (res.outcome === 'injected') {
-        this.emit(bot.botId, {
+        this.report({
           type: 'message_accepted',
           msgId,
           mode: 'injected',
@@ -152,7 +177,7 @@ export class BotAgent {
 
   private async runTurn(msgId: string, text: string) {
     this.turnRunning = true;
-    this.emit(this.bot.botId, { type: 'message_accepted', msgId, mode: 'prompt' });
+    this.report({ type: 'message_accepted', msgId, mode: 'prompt' });
     try {
       const res = await this.conn!.agent.request('session/prompt', {
         sessionId: this.sessionId!,
@@ -196,7 +221,7 @@ export class BotAgent {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pendingChunk = undefined;
-    this.emit(this.bot.botId, { type: 'agent_update', update: pending.update });
+    this.report({ type: 'agent_update', update: pending.update });
   }
 
   /** 结束当前这一轮（只报一次），然后跑排队的消息；没有就开始计空闲时间 */
@@ -205,7 +230,7 @@ export class BotAgent {
     this.turnRunning = false;
     this.flushChunks();
     this.cancelPermissions();
-    this.emit(this.bot.botId, event);
+    this.report(event);
     const next = this.queue.shift();
     if (next) {
       void this.runTurn(next.msgId, next.text);
@@ -231,7 +256,7 @@ export class BotAgent {
       return;
     }
     void this.applyAutonomy().catch((err: Error) =>
-      console.error(`[${bot.botId}] ${err.message}`)
+      console.error(`[${bot.botId}/${this.taskId}] ${err.message}`)
     );
   }
 
@@ -339,7 +364,9 @@ export class BotAgent {
       windowsHide: true, // Windows：后台 daemon 没有控制台，不加会弹出窗口
     });
     proc.stderr!.pipe(
-      createWriteStream(join(LOG_DIR, `${botId}.log`), { flags: 'a' })
+      createWriteStream(join(LOG_DIR, `${botId}-${this.taskId}.log`), {
+        flags: 'a',
+      })
     );
     proc.on('exit', (code) => {
       if (this.proc !== proc) return;
@@ -363,7 +390,7 @@ export class BotAgent {
           this.bufferChunk(update);
         } else {
           this.flushChunks();
-          this.emit(botId, { type: 'agent_update', update });
+          this.report({ type: 'agent_update', update });
         }
       })
       .onRequest('session/request_permission', (ctx) => {
@@ -371,7 +398,7 @@ export class BotAgent {
         this.flushChunks();
         const requestId = randomUUID();
         const { toolCall, options } = ctx.params;
-        this.emit(botId, {
+        this.report({
           type: 'permission_request',
           requestId,
           toolCall,
@@ -397,13 +424,13 @@ export class BotAgent {
       mcpServers: [],
       ...(metaKey ? { _meta: { [metaKey]: true } } : {}),
     };
-    if (this.bot.sessionId) {
+    if (this.savedSessionId) {
       try {
         await this.conn.agent.request('session/resume', {
-          sessionId: this.bot.sessionId,
+          sessionId: this.savedSessionId,
           ...params,
         });
-        this.sessionId = this.bot.sessionId;
+        this.sessionId = this.savedSessionId;
       } catch {
         // 恢复不了（比如会话文件被删了），新建一个
       }
@@ -411,7 +438,8 @@ export class BotAgent {
     if (!this.sessionId) {
       const created = await this.conn.agent.request('session/new', params);
       this.sessionId = created.sessionId;
-      this.emit(botId, { type: 'session', sessionId: created.sessionId });
+      this.savedSessionId = created.sessionId;
+      this.report({ type: 'session', sessionId: created.sessionId });
     }
     if (metaKey !== undefined) {
       this.appliedMode = metaKey;

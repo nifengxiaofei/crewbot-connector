@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  CLOSE_OUTDATED,
   CLOSE_REVOKED,
   PING,
   PONG,
@@ -10,7 +11,7 @@ import {
   type ServerToDaemon,
 } from '@crewbot/protocol';
 
-import { BotAgent } from './agent';
+import { TaskAgent } from './agent';
 import { deleteCredentials, type Credentials } from './credentials';
 import { getDeviceInfo } from './device';
 import { CONFIG_DIR, PID_PATH, STATE_PATH } from './paths';
@@ -26,7 +27,7 @@ const CLOSE_REPLACED = 4000;
 const log = (msg: string) =>
   console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 
-/** 每个 bot 最多缓存这么多条还没确认的事件 */
+/** 每个会话最多缓存这么多条还没确认的事件 */
 const OUTBOX_LIMIT = 2000;
 
 /** 当前连接；断线期间为 null */
@@ -34,11 +35,12 @@ let socket: WebSocket | null = null;
 /** 每个 bot 的事件编号，服务器按它去重；重连时从服务器已收到的编号接着往后编 */
 const dseq = new Map<string, number>();
 /**
- * 每个 bot 发出后还没确认的事件（断线期间的输出也在这里）。
+ * 每个 bot 发出后还没确认的事件（断线期间的输出也在这里），这个 bot 的几个会话共用。
  * 重连收到 welcome 时，服务器已收到的丢掉，其余重发——断线前一刻在路上丢了的也能补回来
  */
 const outbox = new Map<string, Extract<DaemonToServer, { type: 'bot_event' }>[]>();
-const agents = new Map<string, BotAgent>();
+/** 每个会话一个：taskId → 它的 agent 进程和 ACP 会话 */
+const agents = new Map<string, TaskAgent>();
 /**
  * 最近收到的用户消息：服务器没收到 message_accepted 就会在重连后重发，按 msgId 去重。
  * 只留最近这么多条
@@ -68,13 +70,19 @@ function saveState(patch: Partial<DaemonState>) {
   writeFileSync(STATE_PATH, JSON.stringify(state, null, 2) + '\n');
 }
 
-function emit(botId: string, event: DaemonEventPayload) {
+function emit(botId: string, taskId: string, event: DaemonEventPayload) {
   const next = (dseq.get(botId) ?? 0) + 1;
   dseq.set(botId, next);
-  const msg = { type: 'bot_event' as const, botId, dseq: next, event };
+  const msg = { type: 'bot_event' as const, botId, taskId, dseq: next, event };
   const box = outbox.get(botId) ?? [];
   box.push(msg);
-  if (box.length > OUTBOX_LIMIT) box.shift();
+  // 超出时只丢这个会话自己最早的，不挤掉同一个 bot 别的会话的事件
+  if (box.filter((m) => m.taskId === taskId).length > OUTBOX_LIMIT) {
+    box.splice(
+      box.findIndex((m) => m.taskId === taskId),
+      1
+    );
+  }
   outbox.set(botId, box);
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
 }
@@ -84,8 +92,8 @@ function onMessage(msg: ServerToDaemon) {
     case 'welcome': {
       // 服务器那边已经没有的 bot（离线期间被删了）：关掉进程，删掉默认目录
       const known = new Set(msg.bots.map((b) => b.botId));
-      for (const botId of agents.keys()) {
-        if (!known.has(botId)) removeBot(botId);
+      for (const agent of [...agents.values()]) {
+        if (!known.has(agent.botId)) removeBot(agent.botId);
       }
       pruneWorkspaces(known);
       let resent = 0;
@@ -101,13 +109,15 @@ function onMessage(msg: ServerToDaemon) {
       return;
     }
     case 'permission_response':
-      agents.get(msg.botId)?.resolvePermission(msg.requestId, msg.optionId);
+      agents.get(msg.taskId)?.resolvePermission(msg.requestId, msg.optionId);
       return;
     case 'cancel':
-      agents.get(msg.botId)?.cancel();
+      agents.get(msg.taskId)?.cancel();
       return;
     case 'bot_updated':
-      agents.get(msg.bot.botId)?.updateBot(msg.bot);
+      for (const agent of agents.values()) {
+        if (agent.botId === msg.bot.botId) agent.updateBot(msg.bot);
+      }
       return;
     case 'bot_removed':
       removeBot(msg.botId);
@@ -118,22 +128,24 @@ function onMessage(msg: ServerToDaemon) {
       if (seenMsgIds.size > SEEN_MSG_LIMIT) {
         seenMsgIds.delete(seenMsgIds.values().next().value!);
       }
-      const { botId } = msg.bot;
-      let agent = agents.get(botId);
+      let agent = agents.get(msg.taskId);
       if (!agent) {
-        agent = new BotAgent(msg.bot, emit);
-        agents.set(botId, agent);
+        agent = new TaskAgent(msg.bot, msg.taskId, emit);
+        agents.set(msg.taskId, agent);
       }
-      void agent.handleMessage(msg.bot, msg.msgId, msg.text);
+      void agent.handleMessage(msg.bot, msg.sessionId, msg.msgId, msg.text);
       return;
     }
   }
 }
 
-/** bot 被删了：先关进程，再删它的默认目录（用户指定的目录不动） */
+/** bot 被删了：先关它所有会话的进程，再删它的默认目录（用户指定的目录不动） */
 function removeBot(botId: string) {
-  agents.get(botId)?.stop();
-  agents.delete(botId);
+  for (const [taskId, agent] of agents) {
+    if (agent.botId !== botId) continue;
+    agent.stop();
+    agents.delete(taskId);
+  }
   outbox.delete(botId);
   dseq.delete(botId);
   removeWorkspace(botId);
@@ -172,15 +184,13 @@ function connectOnce(
         device: await getDeviceInfo(),
         // 还在跑的轮次（包括消息收到了、agent 还在准备的），以及结果还没传上去的
         // 轮次（断线期间结束了，turn_end 还在待传队列里）：都不能让服务器判中断，
-        // welcome 后补传就能收尾
-        runningBots: [
+        // welcome 后补传就能收尾。按会话报
+        runningTasks: [
           ...new Set([
             ...[...agents]
               .filter(([, agent]) => agent.running)
-              .map(([botId]) => botId),
-            ...[...outbox]
-              .filter(([, box]) => box.length > 0)
-              .map(([botId]) => botId),
+              .map(([taskId]) => taskId),
+            ...[...outbox.values()].flat().map((m) => m.taskId),
           ]),
         ],
       });
@@ -246,6 +256,11 @@ export async function runDaemon(creds: Credentials): Promise<never> {
     });
     if (code === CLOSE_REPLACED) {
       shutdown('Another crewbot started on this device.');
+    }
+    if (code === CLOSE_OUTDATED) {
+      shutdown(
+        'This version of CrewBot is too old for the server. Upgrade with `npx crewbot@latest restart` (or `npm i -g crewbot@latest`, then `crewbot restart`).'
+      );
     }
     // 在网页上被移除：在线时服务器直接用 CLOSE_REVOKED 断开；离线期间被移除的，
     // 重连时握手被拒（401），这里确认一下凭据确实失效了
